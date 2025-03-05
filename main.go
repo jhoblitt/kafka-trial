@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"flag"
 	"log"
 	"os"
 	"sync"
@@ -233,6 +234,10 @@ func main() {
 		log.Fatal("env var KT_TOPIC is required")
 	}
 
+	writerCount := flag.Int64("writers", 10, "Number of writers to run")
+	messageCount := flag.Int64("messages", 10, "Number of messages to send per writer")
+	flag.Parse()
+
 	kafkaCommonConf := kafka.ConfigMap{
 		"bootstrap.servers": bootstrapServers,
 		"security.protocol": "SASL_SSL",
@@ -275,13 +280,13 @@ func main() {
 	// generate messages
 	var wg sync.WaitGroup
 
-	for i := 0; i < 100; i++ {
+	for i := int64(0); i < *writerCount; i++ {
 		wg.Add(1)
 
 		go func() {
 			defer wg.Done()
 
-			runProducer(kafkaCommonConf, topicName, 10, &messages)
+			runProducer(kafkaCommonConf, topicName, *messageCount, &messages)
 		}()
 	}
 
