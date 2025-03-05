@@ -280,6 +280,7 @@ func main() {
 	// generate messages
 	var wg sync.WaitGroup
 
+	producersStartTS := time.Now()
 	for i := int64(0); i < *writerCount; i++ {
 		wg.Add(1)
 
@@ -291,7 +292,15 @@ func main() {
 	}
 
 	wg.Wait()
+	producersEndTS := time.Now()
 
 	// XXX temp kludge -- delay exit to listen for messages still inflight
 	time.Sleep(5 * time.Second)
+
+	producersDuration := producersEndTS.Sub(producersStartTS)
+	totalMessages := *writerCount * *messageCount
+	producersRate := float64(totalMessages) / producersDuration.Seconds()
+
+	log.Printf("Producers took %s\n", producersDuration)
+	log.Printf("Producers message rate %.2f/s\n", producersRate)
 }
