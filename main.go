@@ -151,7 +151,9 @@ func listen(conf *trialConf) {
 
 		duration := time.Now().Sub(trial.CreatedAt.AsTime())
 		results = append(results, duration)
-		log.Printf("Received %q - age %s\n", trial.Uuid, duration)
+		if conf.verbose {
+			log.Printf("Received %q - age %s\n", trial.Uuid, duration)
+		}
 	}
 
 	conf.consumerResults = results
@@ -188,7 +190,9 @@ func runProducer(conf *trialConf) {
 						log.Println("Failed to deserialize message:", err)
 					}
 					duration := time.Now().Sub(trial.CreatedAt.AsTime())
-					log.Printf("Sent %q - age %s\n", trial.Uuid, duration)
+					if conf.verbose {
+						log.Printf("Sent %q - age %s\n", trial.Uuid, duration)
+					}
 				}
 			}
 		}
@@ -202,7 +206,9 @@ func runProducer(conf *trialConf) {
 			CreatedAt: timestamppb.New(time.Now()), // Convert time.Time to protobuf Timestamp
 		}
 
-		log.Printf("Sending %q\n", trial.Uuid)
+		if conf.verbose {
+			log.Printf("Sending %q\n", trial.Uuid)
+		}
 
 		trialBytes, err := proto.Marshal(trial)
 		if err != nil {
@@ -238,6 +244,7 @@ type trialConf struct {
 	writerCount     int64
 	messageCount    int64
 	consumerResults []time.Duration
+	verbose         bool
 }
 
 func main() {
@@ -260,6 +267,7 @@ func main() {
 
 	writerCount := flag.Int64("writers", 10, "Number of writers to run")
 	messageCount := flag.Int64("messages", 10, "Number of messages to send per writer")
+	verbose := flag.Bool("verbose", false, "Enable verbose logging")
 	flag.Parse()
 
 	kafkaCommonConf := kafka.ConfigMap{
@@ -276,6 +284,7 @@ func main() {
 		writerCount:     *writerCount,
 		messageCount:    *messageCount,
 		kafkaCommonConf: kafkaCommonConf,
+		verbose:         *verbose,
 	}
 
 	admin, err := kafka.NewAdminClient(&kafkaCommonConf)
@@ -340,6 +349,7 @@ func main() {
 	consumersDuration := consumersEndTS.Sub(producersStartTS)
 	consumersRate := float64(conf.totalMessages) / consumersDuration.Seconds()
 
+	log.Printf("Total messages: %d\n", conf.totalMessages)
 	log.Printf("Producers took %s\n", producersDuration)
 	log.Printf("Producers message rate %.2f/s\n", producersRate)
 
