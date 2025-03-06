@@ -17,6 +17,18 @@ import (
 	trialpb "github.com/jhoblitt/kafka-trial/trialpb"
 )
 
+// based on https://gosamples.dev/calculate-mean/
+func mean[T time.Duration](data []T) float64 {
+	if len(data) == 0 {
+		return 0
+	}
+	var sum float64
+	for _, d := range data {
+		sum += float64(d)
+	}
+	return sum / float64(len(data))
+}
+
 // Check if the kafka topic exists
 func checkTopicExists(admin *kafka.AdminClient, topicName string) (bool, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -93,7 +105,7 @@ func createTopic(admin *kafka.AdminClient, topicName string) error {
 }
 
 // consume messages from topicName
-func listen(kafkaCommonConf kafka.ConfigMap, topicName string, messages *sync.Map) {
+func listen(conf *trialConf) {
 	kafkaConsumerConf := kafka.ConfigMap{
 		"group.id":          "user-consumer-group",
 		"auto.offset.reset": "earliest",
@@ -102,7 +114,7 @@ func listen(kafkaCommonConf kafka.ConfigMap, topicName string, messages *sync.Ma
 		"fetch.wait.max.ms":  5,
 		"enable.auto.commit": false,
 	}
-	for k, v := range kafkaCommonConf {
+	for k, v := range conf.kafkaCommonConf {
 		kafkaConsumerConf[k] = v
 	}
 
@@ -113,14 +125,16 @@ func listen(kafkaCommonConf kafka.ConfigMap, topicName string, messages *sync.Ma
 	defer consumer.Close()
 
 	// Subscribe to the topic
-	err = consumer.Subscribe(topicName, nil)
+	err = consumer.Subscribe(conf.topicName, nil)
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	log.Printf("Listening for messages on topic %q", topicName)
+	log.Printf("Listening for messages on topic %q", conf.topicName)
 
-	for {
+	results := make([]time.Duration, conf.totalMessages)
+
+	for i := int64(0); i < conf.totalMessages; i++ {
 		msg, err := consumer.ReadMessage(-1)
 		if err != nil {
 			log.Println("Consumer error:", err)
@@ -136,16 +150,19 @@ func listen(kafkaCommonConf kafka.ConfigMap, topicName string, messages *sync.Ma
 		}
 
 		duration := time.Now().Sub(trial.CreatedAt.AsTime())
+		results = append(results, duration)
 		log.Printf("Received %q - age %s\n", trial.Uuid, duration)
 	}
+
+	conf.consumerResults = results
 }
 
 // produce messageCount messages to topicName
-func runProducer(kafkaCommonConf kafka.ConfigMap, topicName string, messageCount int64, messages *sync.Map) {
+func runProducer(conf *trialConf) {
 	kafkaProducerConf := kafka.ConfigMap{
 		"linger.ms": 0,
 	}
-	for k, v := range kafkaCommonConf {
+	for k, v := range conf.kafkaCommonConf {
 		kafkaProducerConf[k] = v
 	}
 
@@ -178,14 +195,12 @@ func runProducer(kafkaCommonConf kafka.ConfigMap, topicName string, messageCount
 	}()
 
 	// create n messages
-	for i := int64(0); i < messageCount; i++ {
+	for i := int64(0); i < conf.messageCount; i++ {
 		// Create a user with current time
 		trial := &trialpb.Trial{
 			Uuid:      uuid.New().String(),
 			CreatedAt: timestamppb.New(time.Now()), // Convert time.Time to protobuf Timestamp
 		}
-
-		messages.Store(trial.Uuid, trial)
 
 		log.Printf("Sending %q\n", trial.Uuid)
 
@@ -197,7 +212,7 @@ func runProducer(kafkaCommonConf kafka.ConfigMap, topicName string, messageCount
 		// Produce the message
 		msg := &kafka.Message{
 			TopicPartition: kafka.TopicPartition{
-				Topic:     &topicName,
+				Topic:     &conf.topicName,
 				Partition: kafka.PartitionAny,
 			},
 			Value: trialBytes,
@@ -214,6 +229,15 @@ func runProducer(kafkaCommonConf kafka.ConfigMap, topicName string, messageCount
 			log.Fatalf("Failed to devlier all messages. %d messages remaining\n", remaining)
 		}
 	}
+}
+
+type trialConf struct {
+	kafkaCommonConf kafka.ConfigMap
+	topicName       string
+	totalMessages   int64
+	writerCount     int64
+	messageCount    int64
+	consumerResults []time.Duration
 }
 
 func main() {
@@ -246,61 +270,80 @@ func main() {
 		"sasl.password":     saslPassword,
 	}
 
+	conf := &trialConf{
+		totalMessages:   *writerCount * *messageCount,
+		topicName:       topicName,
+		writerCount:     *writerCount,
+		messageCount:    *messageCount,
+		kafkaCommonConf: kafkaCommonConf,
+	}
+
 	admin, err := kafka.NewAdminClient(&kafkaCommonConf)
 	if err != nil {
 		log.Fatalf("Failed to create AdminClient: %v", err)
 	}
 	defer admin.Close()
 
-	exists, err := checkTopicExists(admin, topicName)
+	exists, err := checkTopicExists(admin, conf.topicName)
 	if err != nil {
 		log.Fatalf("Failed to check if topic exists: %v", err)
 	}
 
 	if exists {
 		// delete the topic so it can be recreated
-		log.Printf("Deleting topic %q to recreate it\n", topicName)
-		err := deleteTopic(admin, topicName)
+		log.Printf("Deleting topic %q to recreate it\n", conf.topicName)
+		err := deleteTopic(admin, conf.topicName)
 		if err != nil {
 			log.Fatalf("Failed to delete topic: %v", err)
 		}
 	}
 
-	err = createTopic(admin, topicName)
+	err = createTopic(admin, conf.topicName)
 	if err != nil {
 		log.Fatalf("Failed to create topic: %v", err)
 	}
-	log.Printf("Created topic %q\n", topicName)
-
-	var messages sync.Map
+	log.Printf("Created topic %q\n", conf.topicName)
 
 	// start listening for messages
-	go listen(kafkaCommonConf, topicName, &messages)
+	var consumersWg sync.WaitGroup
+
+	consumersWg.Add(1)
+	go func() {
+		defer consumersWg.Done()
+		listen(conf)
+	}()
 
 	// generate messages
-	var wg sync.WaitGroup
+	var producersWg sync.WaitGroup
 
 	producersStartTS := time.Now()
-	for i := int64(0); i < *writerCount; i++ {
-		wg.Add(1)
+	for i := int64(0); i < conf.writerCount; i++ {
+		producersWg.Add(1)
 
 		go func() {
-			defer wg.Done()
+			defer producersWg.Done()
 
-			runProducer(kafkaCommonConf, topicName, *messageCount, &messages)
+			runProducer(conf)
 		}()
 	}
 
-	wg.Wait()
+	producersWg.Wait()
 	producersEndTS := time.Now()
 
-	// XXX temp kludge -- delay exit to listen for messages still inflight
-	time.Sleep(5 * time.Second)
-
 	producersDuration := producersEndTS.Sub(producersStartTS)
-	totalMessages := *writerCount * *messageCount
-	producersRate := float64(totalMessages) / producersDuration.Seconds()
+	producersRate := float64(conf.totalMessages) / producersDuration.Seconds()
+
+	consumersWg.Wait()
+	consumersEndTS := time.Now()
+	// use the start ts for producers as we want to know the total time from when
+	// we started writing until we received the last message.
+	consumersDuration := consumersEndTS.Sub(producersStartTS)
+	consumersRate := float64(conf.totalMessages) / consumersDuration.Seconds()
 
 	log.Printf("Producers took %s\n", producersDuration)
 	log.Printf("Producers message rate %.2f/s\n", producersRate)
+
+	log.Printf("Consumers took %s\n", consumersDuration)
+	log.Printf("Consumers message rate %.2f/s\n", consumersRate)
+	log.Printf("Consumers mean latency: %v\n", time.Duration(mean(conf.consumerResults)))
 }
