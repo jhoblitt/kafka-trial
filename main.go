@@ -349,6 +349,12 @@ func main() {
 	consumersDuration := consumersEndTS.Sub(producersStartTS)
 	consumersRate := float64(conf.totalMessages) / consumersDuration.Seconds()
 
+	log.Printf("Deleting topic %q\n", conf.topicName)
+	err = deleteTopic(admin, conf.topicName)
+	if err != nil {
+		log.Fatalf("Failed to delete topic: %v", err)
+	}
+
 	log.Printf("Total messages: %d\n", conf.totalMessages)
 	log.Printf("Producers took %s\n", producersDuration)
 	log.Printf("Producers message rate %.2f/s\n", producersRate)
