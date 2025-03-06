@@ -14,7 +14,7 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	trialpb "github.com/jhoblitt/kafka-trial/trialpb"
+	"github.com/jhoblitt/kafka-trial/trialpb"
 )
 
 // based on https://gosamples.dev/calculate-mean/

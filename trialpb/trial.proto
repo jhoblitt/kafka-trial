@@ -2,8 +2,7 @@ syntax = "proto3";
 
 import "google/protobuf/timestamp.proto";
 
-option go_package = "github.com/jhoblitt/kafka-trial";
-// package userpb;
+option go_package = "github.com/jhoblitt/kafka-trial/trialpb";
 
 message Trial {
   string uuid = 1;
